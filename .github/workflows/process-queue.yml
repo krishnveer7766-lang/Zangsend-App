@@ -1,0 +1,17 @@
+name: Process Queue
+
+on:
+  schedule:
+    - cron: "*/1 * * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Supabase process-queue
+        run: |
+          curl -sS -X POST "${{ secrets.SUPABASE_PROCESS_QUEUE_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{}"
+

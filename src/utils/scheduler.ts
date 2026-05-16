@@ -1,0 +1,90 @@
+export interface SchedulingResult {
+  contactId: string;
+  scheduled_send_at: string;
+  sender_id: string;
+}
+
+export function distributeEmails(
+  contacts: any[],
+  senders: any[],
+  workingHours: { start: string; end: string },
+  maxPerDayPerSender = 45
+): SchedulingResult[] {
+  if (senders.length === 0 || contacts.length === 0) return [];
+
+  const results: SchedulingResult[] = [];
+  const [startHour, startMin] = workingHours.start.split(':').map(Number);
+  const [endHour, endMin] = workingHours.end.split(':').map(Number);
+
+  const startMinutes = startHour * 60 + startMin;
+  const endMinutes = endHour * 60 + endMin;
+
+  const MIN_GAP_MS = 90 * 1000; // 1.5 minutes gap minimum
+
+  // We'll calculate a target start time. If current time is before start, use today's start.
+  // If current time is after end, use tomorrow's start.
+  // Otherwise, use current time.
+  const now = new Date();
+  
+  // Track state for each sender
+  const senderStates = senders.map(s => ({
+    id: s.id,
+    nextTime: now.getTime() + 10000, // Start 10s from now
+    sentToday: 0
+  }));
+
+  // Enforce a global minimum gap across all emails, regardless of sender.
+  let globalNextAllowedTime = now.getTime() + 10000;
+
+  // Distribute contacts to senders
+  for (let i = 0; i < contacts.length; i++) {
+    const contact = contacts[i];
+    const senderIdx = i % senders.length;
+    const state = senderStates[senderIdx];
+
+    let targetTime = Math.max(state.nextTime, globalNextAllowedTime);
+    let valid = false;
+
+    while (!valid) {
+      const d = new Date(targetTime);
+      const currentTimeMinutes = d.getHours() * 60 + d.getMinutes();
+
+      if (currentTimeMinutes < startMinutes) {
+        // Too early: Move to start of today
+        d.setHours(startHour, startMin, 0, 0);
+        targetTime = d.getTime();
+      } else if (currentTimeMinutes >= endMinutes - 1) { // -1 min buffer
+        // Too late: Move to start of tomorrow
+        d.setDate(d.getDate() + 1);
+        d.setHours(startHour, startMin, 0, 0);
+        targetTime = d.getTime();
+        state.sentToday = 0; // New day, reset count
+      } else if (state.sentToday >= maxPerDayPerSender) {
+        // Daily limit reached: Move to start of tomorrow
+        d.setDate(d.getDate() + 1);
+        d.setHours(startHour, startMin, 0, 0);
+        targetTime = d.getTime();
+        state.sentToday = 0;
+      } else {
+        // Within working hours and under limit
+        valid = true;
+      }
+    }
+
+    // Now calculate the gap to spread remaining emails for this sender
+    // Use exactly 90 seconds minimum gap (not spread across window)
+    const gapMs = MIN_GAP_MS;
+
+    results.push({
+      contactId: contact.id,
+      scheduled_send_at: new Date(targetTime).toISOString(),
+      sender_id: state.id
+    });
+
+    state.nextTime = targetTime + gapMs;
+    globalNextAllowedTime = targetTime + gapMs;
+    state.sentToday++;
+  }
+
+  return results;
+}

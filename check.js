@@ -1,0 +1,1 @@
+import 'dotenv/config'; import { createClient } from '@supabase/supabase-js'; const s = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY); s.from('contacts').select('id').limit(1).then(console.log);
