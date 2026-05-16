@@ -18,7 +18,7 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const { to, subject, html, from_email, app_password, sender_name, attachment, contact_id } = JSON.parse(event.body || '{}');
+    const { to, subject, html, from_email, app_password, sender_name, attachment, contact_id, auth_type } = JSON.parse(event.body || '{}');
 
     if (!to || !subject || !html || !from_email || !app_password) {
       return {
@@ -51,7 +51,8 @@ export const handler: Handler = async (event) => {
       finalHtml += `<img src="${trackingEndpoint}?type=open&cid=${contact_id}" width="1" height="1" style="display:none !important;" />`;
     }
 
-    const isOAuth = app_password.length > 50;
+    // BUG FIX 1.4: Use auth_type field for more reliable detection
+    const isOAuth = auth_type === 'oauth' || (app_password.length > 50 && auth_type !== 'app_password');
     const oauthClientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
     const oauthClientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.VITE_GOOGLE_CLIENT_SECRET || '';
 

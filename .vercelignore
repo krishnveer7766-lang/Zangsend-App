@@ -1,0 +1,15 @@
+node_modules
+dist
+.netlify
+.vercel
+google-cloud-sdk
+.gcloud-config
+scratch
+*.sql
+*.cjs
+*.js
+!api_gen.js
+!postcss.config.js
+!tailwind.config.js
+!eslint.config.js
+# Keep any other essential config files

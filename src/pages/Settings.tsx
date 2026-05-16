@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Mail, Key, MessageCircle, Users, CreditCard, Check, Eye, EyeOff, Loader2, CheckCircle, XCircle, Trash2, Clock } from 'lucide-react';
+import { Mail, Key, MessageCircle, Users, CreditCard, Check, Eye, EyeOff, Loader2, CheckCircle, XCircle, Trash2, Clock, LogOut, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export function SettingsPage() {
@@ -16,6 +16,7 @@ export function SettingsPage() {
   const [saveResult, setSaveResult] = useState<'success' | 'error' | null>(null);
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
+  const [loggingOut, setLoggingOut] = useState(false);
 
   // Senders state
   const [senders, setSenders] = useState<any[]>([]);
@@ -214,6 +215,23 @@ export function SettingsPage() {
     }
   };
 
+  const handleLogout = async () => {
+    if (!confirm('Log out from this account now?')) return;
+
+    setLoggingOut(true);
+    try {
+      await supabase.auth.signOut({ scope: 'global' });
+    } catch (err: any) {
+      console.error('Sign out error:', err?.message || err);
+    } finally {
+      localStorage.removeItem('apify_primary');
+      localStorage.removeItem('apify_fallback');
+      localStorage.removeItem('zangsend_working_hours');
+      sessionStorage.clear();
+      window.location.href = '/login';
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       <div className="flex-shrink-0 px-6 py-4 border-b border-border">
@@ -224,6 +242,7 @@ export function SettingsPage() {
         {/* Sidebar */}
         <div className="w-56 border-r border-border bg-surface p-4 space-y-1 overflow-y-auto">
           {([
+            { id: 'account', icon: User, label: 'Account' },
             { id: 'apify', icon: Key, label: 'Apify Keys' },
             { id: 'sender', icon: Mail, label: 'Sender Email' },
             { id: 'scheduling', icon: Clock, label: 'Scheduling' },
@@ -244,6 +263,28 @@ export function SettingsPage() {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-8 max-w-3xl">
+          {activeTab === 'account' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-lg font-medium mb-1">Account</h2>
+                <p className="text-sm text-text-secondary">Manage your login session.</p>
+              </div>
+
+              <div className="p-5 border border-border bg-surface rounded-lg space-y-4">
+                <p className="text-sm text-text-secondary">
+                  Completely log out from your account on this device.
+                </p>
+                <button
+                  onClick={handleLogout}
+                  disabled={loggingOut}
+                  className="btn border border-border text-sm hover:bg-elevated"
+                >
+                  {loggingOut ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LogOut className="w-4 h-4 mr-2" />}
+                  {loggingOut ? 'Logging out...' : 'Log Out'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {activeTab === 'apify' && (
             <div className="space-y-6">

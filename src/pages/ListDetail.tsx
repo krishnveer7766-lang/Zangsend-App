@@ -437,6 +437,7 @@ export function ListDetailPage() {
         return supabase.from('contacts').update({
           status: type === 'draft' ? 'draft' : 'scheduled',
           scheduled_send_at: type === 'draft' ? null : s.scheduled_send_at,
+          sender_id: s.sender_id,
           data: {
             ...currentData,
             sender_id: s.sender_id,
@@ -459,6 +460,7 @@ export function ListDetailPage() {
         updateContactLocally(s.contactId, { 
           status: type === 'draft' ? 'draft' : 'scheduled', 
           scheduled_send_at: type === 'draft' ? null : s.scheduled_send_at,
+          sender_id: s.sender_id,
           data: {
             ...currentData,
             sender_id: s.sender_id,
@@ -474,35 +476,40 @@ export function ListDetailPage() {
 
       if (type === 'draft') {
         // Automatically create drafts in Gmail using the edge function
-        const draftPromises = schedules.map(s => {
+        const createDraft = async (s: any) => {
           const contact = withEmail.find(c => c.id === s.contactId);
           const sender = senders.find(x => x.id === s.sender_id);
           const template = templates.find(t => t.id === contact?.template_id);
           
-          if (!contact || !sender || !template) return Promise.resolve();
+          if (!contact || !sender || !template) return;
 
           let subject = template.subject || 'No Subject';
           let html = template.body || '';
           
-          subject = subject.replace(/\{\{first_name\}\}/g, contact.first_name || '')
-                           .replace(/\{\{last_name\}\}/g, contact.last_name || '')
-                           .replace(/\{\{company_name\}\}/g, contact.company_name || '');
-                           
-          html = html.replace(/\{\{first_name\}\}/g, contact.first_name || '')
-                     .replace(/\{\{last_name\}\}/g, contact.last_name || '')
-                     .replace(/\{\{company_name\}\}/g, contact.company_name || '');
+          const rep = (str: string) => str
+            .replace(/\{\{first_name\}\}/g, contact.first_name || '')
+            .replace(/\{\{last_name\}\}/g, contact.last_name || '')
+            .replace(/\{\{company_name\}\}/g, contact.company_name || '')
+            .replace(/\{\{title\}\}/g, contact.title || '');
+
+          subject = rep(subject);
+          html = rep(html);
 
           const attachment = attachments.find(a => a.id === contact.attachment_id);
           let attachmentUrl = undefined;
           let attachmentFilename = undefined;
           
           if (attachment?.storage_path) {
-            const { data: publicUrlData } = supabase.storage.from('attachments').getPublicUrl(attachment.storage_path);
-            attachmentUrl = publicUrlData.publicUrl;
+            // BUG FIX 2.4: Use signed URL instead of public URL
+            const { data: signedUrlData } = await supabase.storage
+              .from('attachments')
+              .createSignedUrl(attachment.storage_path, 3600); // 1 hour expiry
+            
+            attachmentUrl = signedUrlData?.signedUrl;
             attachmentFilename = attachment.filename;
           }
 
-          return invokeNetlifyFunction('create-draft', {
+          const data = await invokeNetlifyFunction('create-draft', {
             to: contact.email,
             subject: subject,
             html: html,
@@ -511,20 +518,28 @@ export function ListDetailPage() {
             sender_name: sender.name || sender.sender_name || undefined,
             attachment_url: attachmentUrl,
             attachment_filename: attachmentFilename
-          }).then((data) => {
-            if (data?.error) {
-              throw new Error("Failed to create draft in Gmail: " + data.error);
-            }
-            return data;
           });
-        });
+
+          if (data?.error) {
+            throw new Error(`Draft failed for ${contact.email}: ${data.error}`);
+          }
+          return data;
+        };
+
+        // BUG FIX 2.5: Process in chunks (concurrency limit)
+        const chunkSize = 3;
+        const allResults = [];
+        for (let i = 0; i < schedules.length; i += chunkSize) {
+          const chunk = schedules.slice(i, i + chunkSize);
+          // BUG FIX 2.1: Use Promise.allSettled
+          const results = await Promise.allSettled(chunk.map(s => createDraft(s)));
+          allResults.push(...results);
+        }
         
-        try {
-          await Promise.all(draftPromises);
-        } catch (err: any) {
-          alert(err.message);
-          setIsSending(false);
-          return;
+        const failed = allResults.filter(r => r.status === 'rejected');
+        if (failed.length > 0) {
+          console.error('Some drafts failed:', failed);
+          alert(`${failed.length} drafts failed to create in Gmail. Check console for details.`);
         }
       }
 
@@ -620,9 +635,6 @@ export function ListDetailPage() {
   };
 
   const filteredContacts = contacts.filter(c => {
-    // Hide scheduled contacts as they "move" to the Scheduled tab
-    if (c.status === 'scheduled') return false;
-
     const matchesSearch = (c.first_name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
       (c.last_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (c.company_name || '').toLowerCase().includes(searchQuery.toLowerCase());
@@ -630,11 +642,12 @@ export function ListDetailPage() {
     if (!matchesSearch) return false;
     
     if (activeTab === 'All') return true;
-    if (activeTab === 'Pending') return c.status === 'pending';
-    if (activeTab === 'Email Found') return c.status === 'email_found';
-    if (activeTab === 'Sent') return c.status === 'sent';
-    if (activeTab === 'Bounced') return c.status === 'email_not_found';
-    if (activeTab === 'Draft') return c.status === 'draft';
+    if (activeTab === 'Pending') return c.status?.toLowerCase() === 'pending';
+    if (activeTab === 'Email Found') return c.status?.toLowerCase() === 'email_found';
+    if (activeTab === 'Scheduled') return c.status?.toLowerCase() === 'scheduled';
+    if (activeTab === 'Sent') return c.status?.toLowerCase() === 'sent';
+    if (activeTab === 'Bounced') return c.status?.toLowerCase() === 'bounced' || c.status?.toLowerCase() === 'email_not_found';
+    if (activeTab === 'Draft') return c.status?.toLowerCase() === 'draft';
     
     return true;
   });
@@ -708,7 +721,7 @@ export function ListDetailPage() {
       {/* Tabs & Toolbar */}
       <div className="flex-shrink-0 bg-surface border-b border-border flex flex-col">
         <div className="flex px-6 space-x-6 border-b border-border">
-          {['All', 'Pending', 'Email Found', 'Sent', 'Bounced', 'Draft'].map(tab => (
+          {['All', 'Pending', 'Email Found', 'Scheduled', 'Sent', 'Bounced', 'Draft'].map(tab => (
             <button 
               key={tab} 
               onClick={() => setActiveTab(tab)}
@@ -765,9 +778,9 @@ export function ListDetailPage() {
           </thead>
           <tbody className="text-[12.5px]">
             {loading ? (
-              <tr><td colSpan={9} className="text-center py-8 text-text-secondary">Loading contacts...</td></tr>
+              <tr><td colSpan={12} className="text-center py-8 text-text-secondary">Loading contacts...</td></tr>
             ) : filteredContacts.length === 0 ? (
-              <tr><td colSpan={9} className="text-center py-8 text-text-secondary">No contacts found in this list.</td></tr>
+              <tr><td colSpan={12} className="text-center py-8 text-text-secondary">No contacts found in this list.</td></tr>
             ) : filteredContacts.map((contact) => (
               <tr key={contact.id} className={`border-b border-border-soft hover:bg-elevated/50 transition-colors group cursor-pointer ${selectedRows.includes(contact.id) ? 'bg-primary-ghost/30' : ''}`}>
                 <td className="px-6 py-3">
@@ -850,7 +863,11 @@ export function ListDetailPage() {
                   </select>
                 </td>
                 <td className="px-6 py-3 text-text-tertiary font-mono">
-                  {contact.scheduled_send_at ? new Date(contact.scheduled_send_at).toLocaleDateString() : '-'}
+                  {contact.status === 'scheduled' ? (
+                    <span className="text-primary">{new Date(contact.scheduled_send_at!).toLocaleString()}</span>
+                  ) : contact.sent_at ? (
+                    <span className="text-status-sent">{new Date(contact.sent_at).toLocaleString()}</span>
+                  ) : '-'}
                 </td>
                 <td className="px-6 py-3 text-right">
                   <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">

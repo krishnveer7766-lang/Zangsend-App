@@ -1,6 +1,13 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/" }
+    { "source": "/.netlify/functions/(.*)", "destination": "/api/$1" },
+    { "source": "/((?!api|favicon.ico|assets).*)", "destination": "/" }
+  ],
+  "crons": [
+    {
+      "path": "/api/process-queue-scheduled",
+      "schedule": "0 0 * * *"
+    }
   ]
 }
 

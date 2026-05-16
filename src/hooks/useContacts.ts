@@ -16,6 +16,7 @@ export type Contact = {
   scheduled_send_at: string | null;
   sent_at?: string | null;
   data?: any;
+  sender_id: string | null;
   created_at: string;
   template?: { name: string } | null;
   attachment?: { filename: string, storage_path: string } | null;

@@ -18,29 +18,42 @@ export function ScheduledPage() {
   const fetchScheduled = async () => {
     setLoading(true);
     try {
-      const [contactsRes, templatesRes, listsRes] = await Promise.all([
-        supabase.from('contacts').select('*').in('status', ['scheduled', 'processing']),
-        supabase.from('templates').select('id, name'),
-        supabase.from('lists').select('id, name')
-      ]);
+      // Fetch everything that has a scheduled time
+      const { data: contacts, error: contactsError } = await supabase
+        .from('contacts')
+        .select('*')
+        .not('scheduled_send_at', 'is', null)
+        .order('scheduled_send_at', { ascending: true });
       
-      if (contactsRes.error) throw contactsRes.error;
+      if (contactsError) throw contactsError;
 
-      const templateMap = new Map((templatesRes.data || []).map(t => [t.id, t.name]));
-      const listMap = new Map((listsRes.data || []).map(l => [l.id, l.name]));
+      const { data: templates } = await supabase.from('templates').select('id, name');
+      const { data: lists } = await supabase.from('lists').select('id, name');
 
-      const formatted = (contactsRes.data || []).map(c => ({
-        ...c,
-        first_name: c.first_name || c.data?.first_name || '',
-        last_name: c.last_name || c.data?.last_name || '',
-        email: c.email || c.data?.email || '',
-        display_status: c.status || 'scheduled',
-        template: { name: templateMap.get(c.template_id) || 'None' },
-        list: { name: listMap.get(c.list_id) || 'Unknown List' }
-      }));
+      const templateMap = new Map((templates || []).map(t => [t.id, t.name]));
+      const listMap = new Map((lists || []).map(l => [l.id, l.name]));
+
+      const formatted = (contacts || [])
+        .filter(c => {
+          const s = (c.status || '').toLowerCase();
+          // Show everything except what is already finished (sent/bounced)
+          return s !== 'sent' && s !== 'bounced';
+        })
+        .map(c => ({
+          ...c,
+          first_name: c.first_name || c.data?.first_name || '',
+          last_name: c.last_name || c.data?.last_name || '',
+          email: c.email || c.data?.email || '',
+          display_status: c.status || 'scheduled',
+          template: { name: templateMap.get(c.template_id) || 'None' },
+          list: { name: listMap.get(c.list_id) || 'Unknown List' }
+        }));
+
+      console.log(`Fetched ${formatted.length} scheduled emails`);
       setScheduled(formatted);
     } catch (err: any) {
       console.error("Error fetching scheduled:", err);
+      alert("Error loading scheduled emails: " + err.message);
     } finally {
       setLoading(false);
     }
@@ -114,7 +127,7 @@ export function ScheduledPage() {
           scheduled_send_at: null
         })
         .in('id', targetIds)
-        .in('status', ['scheduled', 'processing']);
+        .not('status', 'in', '(sent,bounced)');
 
       if (error) throw error;
 

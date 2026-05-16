@@ -3,15 +3,19 @@ import nodemailer from 'nodemailer';
 
 export async function processQueue() {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '';
 
   if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Missing Supabase environment variables');
+    console.error('Missing environment variables:', { 
+      url: !!supabaseUrl, 
+      key: !!supabaseKey 
+    });
+    throw new Error('Missing Supabase environment variables (URL or Service Role Key)');
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  console.log("Queue processor started...");
+  console.log("Queue processor: fetching due emails...");
   try {
     const now = new Date();
     console.log(`Current time: ${now.toISOString()}`);
@@ -22,9 +26,14 @@ export async function processQueue() {
       .eq('status', 'scheduled')
       .lte('scheduled_send_at', now.toISOString())
       .order('scheduled_send_at', { ascending: true })
-      .limit(10);
+      .limit(5);
 
-    if (fetchError || !dueEmails || dueEmails.length === 0) {
+    if (fetchError) {
+      console.error("Supabase fetch error:", fetchError);
+      throw new Error(`Failed to fetch emails: ${fetchError.message}`);
+    }
+
+    if (!dueEmails || dueEmails.length === 0) {
       console.log("No emails due.");
       return { count: 0 };
     }
@@ -58,14 +67,20 @@ export async function processQueue() {
         let body = dueEmail.template?.body || dueEmail.body || '';
         let subject = dueEmail.template?.subject || dueEmail.subject || 'No Subject';
 
-        body = body
-          .replace(/\{\{first_name\}\}/g, dueEmail.first_name || '')
-          .replace(/\{\{last_name\}\}/g, dueEmail.last_name || '')
-          .replace(/\{\{company_name\}\}/g, dueEmail.company_name || '')
-          .replace(/\{\{title\}\}/g, dueEmail.title || '');
+        // BUG FIX 1.5: Replace variables in both subject and body
+        const replaceVars = (str: string) => {
+          return str
+            .replace(/\{\{first_name\}\}/g, dueEmail.first_name || '')
+            .replace(/\{\{last_name\}\}/g, dueEmail.last_name || '')
+            .replace(/\{\{company_name\}\}/g, dueEmail.company_name || '')
+            .replace(/\{\{title\}\}/g, dueEmail.title || '');
+        };
 
-        const siteUrl = process.env.URL || 'https://zangsend.netlify.app';
-        const trackingEndpoint = `${siteUrl}/api/track`;
+        body = replaceVars(body);
+        subject = replaceVars(subject);
+
+        const siteUrl = process.env.URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://zangsend.netlify.app');
+        const trackingEndpoint = `${siteUrl}/.netlify/functions/track`;
         body = body.replace(/<a\s+(?:[^>]*?\s+)?href=(["'])(.*?)\1/gi, (match, quote, url) => {
           if (url.startsWith('http')) {
             return `<a href="${trackingEndpoint}?type=click&cid=${dueEmail.id}&url=${encodeURIComponent(url)}"`;
@@ -93,10 +108,15 @@ export async function processQueue() {
           }
         }
 
-        const isOAuth = sender.app_password.length > 50;
+        // BUG FIX 1.4: Use auth_type field for more reliable detection
+        const isOAuth = sender.auth_type === 'oauth' || (sender.app_password?.length > 50 && sender.auth_type !== 'app_password');
         const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
         const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.VITE_GOOGLE_CLIENT_SECRET || '';
         
+        if (isOAuth && (!clientId || !clientSecret)) {
+          throw new Error("Missing OAuth credentials (GOOGLE_CLIENT_ID/SECRET)");
+        }
+
         const transporter = nodemailer.createTransport({
           service: 'gmail',
           auth: isOAuth ? {

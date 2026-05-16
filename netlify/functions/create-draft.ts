@@ -14,7 +14,7 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const { to, subject, html, from_email, app_password, sender_name, attachment_url, attachment_filename } = JSON.parse(event.body || '{}');
+    const { to, subject, html, from_email, app_password, sender_name, attachment_url, attachment_filename, auth_type } = JSON.parse(event.body || '{}');
 
     if (!to || !html || !from_email || !app_password) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Missing required fields' }) };
@@ -56,7 +56,8 @@ export const handler: Handler = async (event) => {
       });
     });
 
-    const isOAuth = app_password.length > 50;
+    // BUG FIX 1.4: Improved OAuth detection
+    const isOAuth = auth_type === 'oauth' || (app_password.length > 50 && auth_type !== 'app_password');
     let accessToken = undefined;
 
     if (isOAuth) {
@@ -101,10 +102,24 @@ export const handler: Handler = async (event) => {
     await client.connect();
 
     try {
-      await client.append('[Gmail]/Drafts', rawMessage, ['\\Draft']);
+      // BUG FIX 2.3: Dynamic Drafts folder detection
+      const mailboxes = await client.list();
+      const draftBox = mailboxes.find(m => m.specialUse === '\\Drafts') || 
+                       mailboxes.find(m => m.path.toLowerCase().includes('draft'));
+      
+      if (draftBox) {
+        await client.append(draftBox.path, rawMessage, ['\\Draft']);
+      } else {
+        // Fallback
+        try {
+          await client.append('[Gmail]/Drafts', rawMessage, ['\\Draft']);
+        } catch (e) {
+          await client.append('Drafts', rawMessage, ['\\Draft']);
+        }
+      }
     } catch (e: any) {
-      console.log('Failed to append to [Gmail]/Drafts, trying Drafts...', e.message);
-      await client.append('Drafts', rawMessage, ['\\Draft']);
+      console.error('IMAP append error:', e.message);
+      throw e;
     }
 
     await client.logout();
