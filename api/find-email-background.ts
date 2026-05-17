@@ -8,7 +8,8 @@ export default async function (req: VercelRequest, res: VercelResponse) {
         headers: req.headers as any,
         httpMethod: req.method || 'GET',
         queryStringParameters: req.query as any,
-        path: req.url || ''
+        path: req.url || '',
+        isBase64Encoded: false
     };
     try {
         const result = await (handler as any)(event, {});

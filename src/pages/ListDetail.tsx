@@ -430,11 +430,11 @@ export function ListDetailPage() {
     try {
       // Update each contact
       // To optimize, we can do this in chunks or Promise.all since they have different timestamps and sender_ids
-      const updates = schedules.map(s => {
+      const updates = schedules.map(async s => {
         const contact = withEmail.find(c => c.id === s.contactId);
         const currentData = (contact as any)?.data || {};
         const nowIso = new Date().toISOString();
-        return supabase.from('contacts').update({
+        const { error } = await supabase.from('contacts').update({
           status: type === 'draft' ? 'draft' : 'scheduled',
           scheduled_send_at: type === 'draft' ? null : s.scheduled_send_at,
           sender_id: s.sender_id,
@@ -449,6 +449,10 @@ export function ListDetailPage() {
             }
           }
         }).eq('id', s.contactId);
+        
+        if (error) {
+          throw new Error(`Failed to update contact ${contact?.email || s.contactId}: ${error.message}`);
+        }
       });
       
       await Promise.all(updates);
